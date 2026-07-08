@@ -19,6 +19,7 @@ import TracerPanel from './tools/TracerPanel.jsx'
 import TextPanel from './tools/TextPanel.jsx'
 import PageSetupPanel from './tools/PageSetupPanel.jsx'
 import GuidePanel from './tools/GuidePanel.jsx'
+import CopyModePanel from './tools/CopyModePanel.jsx'
 import {
   IconLine, IconCircle, IconTrim, IconDelete, IconExtend, IconOffset,
   IconMirror, IconMoveCopy, IconRotateCopy, IconResize, IconFillet, IconTrace, IconGuide,
@@ -2834,13 +2835,35 @@ export default function App() {
           {/* Modify group */}
           <span style={{color:'#555',fontFamily:'monospace',fontSize:9,textTransform:'uppercase',letterSpacing:'0.1em',marginRight:2}}>Modify</span>
           {modifyConfig.map(([t,Icon,title,activeColor])=>(
-            <button key={t}
-              onClick={()=>{setTool(t);resetDrawState();resetOffset();resetMirror();resetMoveCopy();resetRotateCopy();resetResize();resetFillet();resetTrace();resetSpline();resetText();resetSelection();resetJoin();resetDim()}}
-              title={title}
-              style={{...btnBase,background:tool===t?activeColor+'33':'transparent',
-                outline:tool===t?`2px solid ${activeColor}`:'none',outlineOffset:'-2px'}}>
-              <Icon active={tool===t}/>
-            </button>
+            <div key={t} style={{position:'relative'}}>
+              <button
+                onClick={()=>{setTool(t);resetDrawState();resetOffset();resetMirror();resetMoveCopy();resetRotateCopy();resetResize();resetFillet();resetTrace();resetSpline();resetText();resetSelection();resetJoin();resetDim()}}
+                title={title}
+                style={{...btnBase,background:tool===t?activeColor+'33':'transparent',
+                  outline:tool===t?`2px solid ${activeColor}`:'none',outlineOffset:'-2px'}}>
+                <Icon active={tool===t}/>
+              </button>
+              {t==='movecopy'&&tool==='movecopy'&&(
+                <CopyModePanel
+                  toolColor={activeColor}
+                  primaryKey="M" primaryLabel="Move" primaryMode="move"
+                  mode={moveCopyMode} count={moveCopyCountInput}
+                  onSetMode={setMoveCopyMode}
+                  onSetCount={n=>setMoveCopyCountInput(String(Math.max(1,Math.min(100,n))))}
+                  locked={!!startPoint}
+                />
+              )}
+              {t==='rotatecopy'&&tool==='rotatecopy'&&(
+                <CopyModePanel
+                  toolColor={activeColor}
+                  primaryKey="R" primaryLabel="Rotate" primaryMode="rotate"
+                  mode={rotateCopyMode} count={rotateCopyCountInput}
+                  onSetMode={setRotateCopyMode}
+                  onSetCount={n=>setRotateCopyCountInput(String(Math.max(1,Math.min(100,n))))}
+                  locked={!!startPoint}
+                />
+              )}
+            </div>
           ))}
           {/* Divider */}
           <div style={{width:1,height:48,background:'#333',margin:'0 6px'}}/>

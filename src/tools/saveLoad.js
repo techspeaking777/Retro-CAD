@@ -11,10 +11,35 @@ function dlText(filename, content, mime) {
   document.body.removeChild(a)
 }
 
-// ── JSON Save ─────────────────────────────────────────────────────────────────
-export function saveJSON(lines, circles, arcs, splines=[], dims=[], filename = 'drawing.json') {
+// True in Chromium browsers (Chrome, Edge) — lets the student pick both the
+// folder and filename via the OS's native Save dialog. Firefox/Safari lack this,
+// so callers should fall back to prompting for a filename and downloading normally.
+export const canPickSaveLocation = () => typeof window !== 'undefined' && !!window.showSaveFilePicker
+
+// Saves the project under a chosen name. When the File System Access API is
+// available, opens the native Save dialog (folder + filename, pre-filled with
+// suggestedName) and writes directly to the chosen file. Otherwise downloads
+// to the browser's default download location using suggestedName.
+// Returns 'saved', 'cancelled' (user closed the native dialog), or 'downloaded'.
+export async function saveProjectAs(lines, circles, arcs, splines=[], suggestedName='drawing.json') {
   const data = JSON.stringify({ lines, circles, arcs, splines }, null, 2)
-  dlText(filename, data, 'application/json')
+  if (canPickSaveLocation()) {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName,
+        types: [{ description: 'CAD drawing', accept: { 'application/json': ['.json'] } }],
+      })
+      const writable = await handle.createWritable()
+      await writable.write(data)
+      await writable.close()
+      return 'saved'
+    } catch (err) {
+      if (err && err.name === 'AbortError') return 'cancelled'
+      throw err
+    }
+  }
+  dlText(suggestedName, data, 'application/json')
+  return 'downloaded'
 }
 
 // ── JSON Load ─────────────────────────────────────────────────────────────────

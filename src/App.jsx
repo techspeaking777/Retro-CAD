@@ -2921,7 +2921,7 @@ export default function App() {
 
   return (
     <div style={{display:'flex',flexDirection:'column',height:'100vh',outline:'none'}} tabIndex={0} onKeyDown={handleKeyDown}>
-      {splashOpen&&<SplashScreen onStart={()=>setSplashOpen(false)}/>}
+      {splashOpen&&<SplashScreen onChoose={which=>{setSplashOpen(false);if(which==='open')loadFileRef.current?.click()}}/>}
       {/* ── Retro CAD 2D title bar ── */}
       <div style={{
         height:46,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',

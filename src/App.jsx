@@ -24,6 +24,7 @@ import LineSnapPanel from './tools/LineSnapPanel.jsx'
 import CircleSnapPanel from './tools/CircleSnapPanel.jsx'
 import SplineSnapPanel from './tools/SplineSnapPanel.jsx'
 import SaveAsPanel from './tools/SaveAsPanel.jsx'
+import SplashScreen from './tools/SplashScreen.jsx'
 import {
   IconLine, IconCircle, IconTrim, IconDelete, IconExtend, IconOffset,
   IconMirror, IconMoveCopy, IconRotateCopy, IconResize, IconFillet, IconTrace, IconGuide,
@@ -33,6 +34,7 @@ import {
 export default function App() {
   const canvasRef=useRef(null)
   const [tool,setTool]=useState('line')
+  const [splashOpen,setSplashOpen]=useState(true)
   const [lines,setLines]=useState([])
   const [circles,setCircles]=useState([])
   const [arcs,setArcs]=useState([])
@@ -2320,6 +2322,7 @@ export default function App() {
   }
 
   function handleKeyDown(e){
+    if (splashOpen) return
     if ((e.key==='t'||e.key==='T')&&!e.ctrlKey&&!e.shiftKey&&(tool==='line'||tool==='circle')){setTKeyDown(p=>!p);return}
     if ((e.key==='p'||e.key==='P')&&!e.ctrlKey&&!e.shiftKey&&tool==='line'){setPKeyDown(p=>!p);return}
     if ((e.key==='h'||e.key==='H')&&!e.ctrlKey&&!e.shiftKey){
@@ -2917,7 +2920,20 @@ export default function App() {
   const zoomPct=Math.round(viewTransform.scale*100)
 
   return (
-    <div style={{display:'flex',height:'100vh',outline:'none'}} tabIndex={0} onKeyDown={handleKeyDown}>
+    <div style={{display:'flex',flexDirection:'column',height:'100vh',outline:'none'}} tabIndex={0} onKeyDown={handleKeyDown}>
+      {splashOpen&&<SplashScreen onStart={()=>setSplashOpen(false)}/>}
+      {/* ── Retro CAD 2D title bar ── */}
+      <div style={{
+        height:46,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',
+        background:'#0d0d1a',borderBottom:'2px solid #2a2a4a',
+        fontFamily:"'Press Start 2P', monospace",userSelect:'none',
+      }}>
+        <span style={{fontSize:15,color:'#FF9800',textShadow:'0 0 8px #FF980088'}}>Retro</span>
+        <span style={{fontSize:15,color:'#eee',margin:'0 10px'}}>CAD</span>
+        <span style={{fontSize:15,color:'#00E5FF',textShadow:'0 0 8px #00E5FF88'}}>2D</span>
+        <span className="retro-cursor" style={{fontSize:15,color:'#00E5FF',marginLeft:4}}>|</span>
+      </div>
+      <div style={{display:'flex',flex:1,minHeight:0}}>
       <div style={{width:72,background:'#1e1e1e',display:'flex',flexDirection:'column',padding:'8px 4px',gap:4}}>
         {toolConfig.map(([t,Icon,title,activeColor])=>(
           <div key={t} style={{position:'relative'}}>
@@ -3214,6 +3230,7 @@ export default function App() {
           })()}
           <div style={{color:'#777',fontFamily:'monospace',fontSize:11,paddingLeft:8,borderLeft:'1px solid #2a2a4a'}}>{zoomPct}%</div>
         </div>
+      </div>
       </div>
 
       {/* Hidden file input */}

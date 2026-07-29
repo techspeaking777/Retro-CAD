@@ -25,6 +25,8 @@ import CircleSnapPanel from './tools/CircleSnapPanel.jsx'
 import SplineSnapPanel from './tools/SplineSnapPanel.jsx'
 import SaveAsPanel from './tools/SaveAsPanel.jsx'
 import SplashScreen from './tools/SplashScreen.jsx'
+import FilletRadiusPanel from './tools/FilletRadiusPanel.jsx'
+import OffsetDistPanel from './tools/OffsetDistPanel.jsx'
 import {
   IconLine, IconCircle, IconTrim, IconDelete, IconExtend, IconOffset,
   IconMirror, IconMoveCopy, IconRotateCopy, IconResize, IconFillet, IconTrace, IconGuide,
@@ -61,7 +63,6 @@ export default function App() {
   const [deletePreview,setDeletePreview]=useState(null)
   const [offsetEntity,setOffsetEntity]=useState(null)    // locked entity after click
   const [offsetDistInput,setOffsetDistInput]=useState('')
-  const [offsetDistLocked,setOffsetDistLocked]=useState(false)
   const [offsetPreview,setOffsetPreview]=useState(null)
   const [offsetHover,setOffsetHover]=useState(null)
   const [mirrorSel,setMirrorSel]=useState([])
@@ -249,6 +250,41 @@ export default function App() {
     setDimInput('');setDimLocked(false);setAngleInput('');setAngleLocked(false);setFocusField('dim')
     setTrackedPts([]);trackedPtsRef.current=[];setDeferredTangent(null);setTKeyDown(false);setPKeyDown(false);setPerpSourceLineIdx(null)
   }
+  // Line tool: typing a length and/or angle only locks that value in — placing
+  // the actual line still requires a canvas click (see LineSnapPanel.jsx).
+  function applyLineDims(){
+    if (dimInput&&parseFloat(dimInput)>0) setDimLocked(true)
+    if (angleInput&&parseFloat(angleInput)>=0) setAngleLocked(true)
+  }
+  // Circle tool: typing a radius only locks that value in — placing the
+  // actual circle still requires a canvas click (see CircleSnapPanel.jsx).
+  // Harmless no-op for the tangent-to-2-circles case, which already treats
+  // any non-empty dimInput as an override regardless of this flag.
+  function applyCircleRadius(){
+    if (dimInput&&parseFloat(dimInput)>0) setDimLocked(true)
+  }
+  // Perpendicular-mode line endpoint, shared by the live preview, the click
+  // commit, and the flyout's placeholder text. FROM mode (a source line was
+  // snapped at the start point) respects a locked Length — the mouse still
+  // picks which side of the ray, but the typed number fixes the distance.
+  // TO mode (snapping onto some other line's foot) is fully geometry-driven,
+  // so a typed length has nothing to override there.
+  function computePerpEndPt(ref){
+    if (perpSourceLineIdx!==null && lines[perpSourceLineIdx]) {
+      const sl=lines[perpSourceLineIdx]
+      const dx=sl.x2-sl.x1, dy=sl.y2-sl.y1, len=Math.hypot(dx,dy)
+      if (len<1e-10) return ref
+      const px=-dy/len, py=dx/len
+      let t=(ref.x-startPoint.x)*px+(ref.y-startPoint.y)*py
+      if (dimLocked){ const forced=mmToPx(parseFloat(dimInput)||0); t=t>=0?forced:-forced }
+      return {x:startPoint.x+t*px, y:startPoint.y+t*py}
+    }
+    const hit=findNearestLineForPerp(ref,lines,perpSourceLineIdx)
+    if (!hit) return ref
+    // If the cursor snapped onto an actual endpoint/midpoint, land exactly
+    // there instead of the strict perpendicular-from-startPoint foot.
+    return hit.isSnap ? hit.foot : calcPerpFoot(startPoint.x,startPoint.y,hit.line.x1,hit.line.y1,hit.line.x2,hit.line.y2,true)
+  }
   function resetSelection(){
     setSelection([]);setSelectHover(null);setSelectLiveGeom(null)
     setSelectDimField(null);setSelectDimPending({});setSelectDimAnchor('mc')
@@ -260,8 +296,17 @@ export default function App() {
   }
   function resetOffset(){
     setOffsetEntity(null)
-    setOffsetDistInput('');setOffsetDistLocked(false)
+    setOffsetDistInput('')
     setOffsetPreview(null);setOffsetHover(null)
+  }
+  function applyOffset(){
+    if (!offsetPreview) return
+    commit(snapshot())
+    if (offsetPreview.kind==='line')   setLines(p=>[...p,{x1:offsetPreview.x1,y1:offsetPreview.y1,x2:offsetPreview.x2,y2:offsetPreview.y2,...(offsetPreview.style?{style:offsetPreview.style}:{})}])
+    if (offsetPreview.kind==='circle') setCircles(p=>[...p,{cx:offsetPreview.cx,cy:offsetPreview.cy,r:offsetPreview.r,...(offsetPreview.style?{style:offsetPreview.style}:{})}])
+    if (offsetPreview.kind==='arc')    setArcs(p=>[...p,{cx:offsetPreview.cx,cy:offsetPreview.cy,r:offsetPreview.r,startAngle:offsetPreview.startAngle,endAngle:offsetPreview.endAngle,...(offsetPreview.style?{style:offsetPreview.style}:{})}])
+    if (offsetPreview.kind==='spline') setSplines(p=>[...p,{points:offsetPreview.points,closed:offsetPreview.closed,polyline:offsetPreview.polyline,...(offsetPreview.style?{style:offsetPreview.style}:{})}])
+    resetOffset()
   }
   function resetMirror(){
     setMirrorSel([]);setMirrorAccepted(false)
@@ -284,6 +329,19 @@ export default function App() {
   function resetFillet(){
     setFilletSel([]);setFilletAccepted(false)
     setFilletRadiusInput('');setFilletHover(null);setFilletPreview(null)
+  }
+  function applyFillet(){
+    if (!filletPreview||filletPreview.tooLarge) return
+    const{newL1,newL2,arc}=filletPreview
+    // Carry style from source lines through fillet
+    const s1=lines[filletSel[0].idx]?.style
+    const s2=lines[filletSel[1].idx]?.style
+    commit(snapshot())
+    setLines(p=>[...p.filter((_,i)=>!filletSel.some(s=>s.idx===i)),
+      s1?{...newL1,style:s1}:newL1,
+      s2?{...newL2,style:s2}:newL2])
+    setArcs(p=>[...p,arc])
+    resetFillet()
   }
   function resetTrace(){
     setTraceOpen(false);setTraceInsertPt(null)
@@ -346,6 +404,7 @@ export default function App() {
           if(!m.some(p=>p.kind===h.kind&&p.idx===h.idx)&&m.length<2)
             m.push({...h,clickPt:{x:(lines[h.idx].x1+lines[h.idx].x2)/2,y:(lines[h.idx].y1+lines[h.idx].y2)/2}})
         })
+        if (m.length===2) setFilletAccepted(true)
         return m
       })
     }
@@ -454,11 +513,11 @@ export default function App() {
     if (offsetEntity.kind==='arc')    entity=arcs[offsetEntity.idx]
     if (offsetEntity.kind==='spline') entity=splines[offsetEntity.idx]
     if (!entity){setOffsetPreview(null);return}
-    const distPx=offsetDistLocked
-      ? mmToPx(parseFloat(offsetDistInput)||1)
+    const distPx=offsetDistInput
+      ? mmToPx(parseFloat(offsetDistInput)||0)
       : distToEntity(mousePos,entity,offsetEntity.kind)
     setOffsetPreview(computeOffsetPreview(entity,offsetEntity.kind,distPx,mousePos))
-  },[tool,mousePos,offsetEntity,offsetDistInput,offsetDistLocked,lines,circles,arcs,splines])
+  },[tool,mousePos,offsetEntity,offsetDistInput,lines,circles,arcs,splines])
 
   useEffect(()=>{
     if (tool!=='offset'||!mousePos){setOffsetHover(null);return}
@@ -649,7 +708,24 @@ export default function App() {
   }
   // Find nearest line to cursor within threshold (pixels).
   // Uses SELECT_DIST (generous) so user doesn't need pixel-perfect aim.
+  // Prefers snapping exactly onto an endpoint or midpoint when the cursor is
+  // close to one, instead of always using the raw perpendicular foot.
   function findNearestLineForPerp(mouse, lines, excludeIdx=null) {
+    const snapDist = SELECT_DIST * 1.5 / zoomRef.scale
+    let bestSnap=null, bestSnapDist=snapDist+1, bestSnapIdx=-1, bestSnapType=null
+    lines.forEach((l,idx)=>{
+      if (idx===excludeIdx) return
+      const pts=[
+        {x:l.x1,y:l.y1,type:'endpoint'},{x:l.x2,y:l.y2,type:'endpoint'},
+        {x:(l.x1+l.x2)/2,y:(l.y1+l.y2)/2,type:'midpoint'},
+      ]
+      pts.forEach(p=>{
+        const d=Math.hypot(mouse.x-p.x,mouse.y-p.y)
+        if (d<bestSnapDist){bestSnapDist=d;bestSnap=p;bestSnapIdx=idx;bestSnapType=p.type}
+      })
+    })
+    if (bestSnap) return { line:lines[bestSnapIdx], idx:bestSnapIdx, foot:bestSnap, isSnap:true, snapType:bestSnapType }
+
     const threshold = SELECT_DIST * 3 / zoomRef.scale
     let best=null, bestIdx=-1, bestDist=threshold+1
     lines.forEach((l,idx)=>{
@@ -659,10 +735,12 @@ export default function App() {
     })
     if (!best) return null
     // Foot clamped to segment so indicator stays on the visible line
-    return { line:best, idx:bestIdx, foot:calcPerpFoot(mouse.x,mouse.y,best.x1,best.y1,best.x2,best.y2,true) }
+    return { line:best, idx:bestIdx, foot:calcPerpFoot(mouse.x,mouse.y,best.x1,best.y1,best.x2,best.y2,true), isSnap:false }
   }
-  // Draw the perp indicator — right-angle square + PERP label (no circles, no arc symbols)
-  function drawPerpIndicator(ctx, x, y, sc) {
+  // Draw the perp indicator — right-angle square + PERP label (no circles, no arc symbols).
+  // labelDY nudges the label down when paired with an endpoint/midpoint marker
+  // at the same point, so the two labels don't overlap.
+  function drawPerpIndicator(ctx, x, y, sc, labelDY=0) {
     ctx.save()
     ctx.translate(x,y); ctx.scale(1/sc,1/sc)
     ctx.strokeStyle='#00BCD4'; ctx.lineWidth=2.5; ctx.lineCap='round'
@@ -675,7 +753,7 @@ export default function App() {
     ctx.moveTo(-s, s-6); ctx.lineTo(-s+6, s-6); ctx.lineTo(-s+6, s)
     ctx.stroke()
     ctx.fillStyle='#00BCD4'; ctx.font='bold 11px monospace'
-    ctx.fillText('PERP', s+4, -s+8)
+    ctx.fillText('PERP', s+4, -s+8+labelDY)
     ctx.restore()
   }
 
@@ -975,13 +1053,13 @@ export default function App() {
         ctx.beginPath();ctx.moveTo(s2[0].x,s2[0].y);s2.slice(1).forEach(pt=>ctx.lineTo(pt.x,pt.y));ctx.stroke()
       }
       ctx.setLineDash([]);ctx.restore()
-      const distMm=offsetDistLocked?parseFloat(offsetDistInput)||0:
+      const distMm=offsetDistInput?parseFloat(offsetDistInput)||0:
         (offsetEntity&&mousePos?pxToMm(distToEntity(mousePos,
           offsetEntity.kind==='line'?drawLines[offsetEntity.idx]:
           offsetEntity.kind==='circle'?drawCircles[offsetEntity.idx]:
           offsetEntity.kind==='arc'?drawArcs[offsetEntity.idx]:drawSplines[offsetEntity.idx],
           offsetEntity.kind)):0)
-      drawLabel(ctx,(offsetDistLocked?'🔒 ':'')+distMm.toFixed(1)+' mm · click to place',mousePos.x,mousePos.y-24/sc,'#4CAF50',sc)
+      drawLabel(ctx,(offsetDistInput?'':'~')+distMm.toFixed(1)+' mm · click to place',mousePos.x,mousePos.y-24/sc,'#4CAF50',sc)
     }
 
     // Mirror axis + preview
@@ -1561,21 +1639,9 @@ export default function App() {
     } else if (tool==='line'&&startPoint){
       // PERP mode: completely bypass tangent/snap system
       if (pKeyDown) {
-        let endPt
-        if (perpSourceLineIdx!==null && lines[perpSourceLineIdx]) {
-          // FROM mode: direction is locked perpendicular to source line
-          // Project mouse onto the perpendicular ray from startPoint
-          const sl=lines[perpSourceLineIdx]
-          const dx=sl.x2-sl.x1, dy=sl.y2-sl.y1, len=Math.hypot(dx,dy)
-          if (len>1e-10) {
-            // Perpendicular direction to source line
-            const px=-dy/len, py=dx/len
-            // Project mouse onto this ray from startPoint
-            const t=(mousePos.x-startPoint.x)*px+(mousePos.y-startPoint.y)*py
-            endPt={x:startPoint.x+t*px, y:startPoint.y+t*py}
-          } else {
-            endPt=mousePos
-          }
+        const endPt=computePerpEndPt(mousePos)
+        const fromMode=perpSourceLineIdx!==null && lines[perpSourceLineIdx]
+        if (fromMode) {
           drawPreviewLine(ctx,startPoint.x,startPoint.y,endPt.x,endPt.y,'#00BCD4',1,sc)
           ctx.save();ctx.translate(startPoint.x,startPoint.y);ctx.scale(1/sc,1/sc)
           ctx.beginPath();ctx.arc(0,0,4,0,Math.PI*2);ctx.fillStyle='#00BCD4';ctx.fill()
@@ -1584,18 +1650,18 @@ export default function App() {
         } else {
           // TO mode: snap end to perp foot on nearest target line
           const hit=findNearestLineForPerp(mousePos,lines,perpSourceLineIdx)
-          endPt=hit
-            ? calcPerpFoot(startPoint.x,startPoint.y,hit.line.x1,hit.line.y1,hit.line.x2,hit.line.y2,true)
-            : mousePos
           drawPreviewLine(ctx,startPoint.x,startPoint.y,endPt.x,endPt.y,'#00BCD4',1,sc)
           ctx.save();ctx.translate(startPoint.x,startPoint.y);ctx.scale(1/sc,1/sc)
           ctx.beginPath();ctx.arc(0,0,4,0,Math.PI*2);ctx.fillStyle='#00BCD4';ctx.fill()
           ctx.restore()
-          if (hit) drawPerpIndicator(ctx,endPt.x,endPt.y,sc)
+          if (hit){
+            if (hit.isSnap) drawLineIndicator(ctx,endPt.x,endPt.y,hit.snapType,sc)
+            drawPerpIndicator(ctx,endPt.x,endPt.y,sc,hit.isSnap?14:0)
+          }
         }
         const lenMm=pxToMm(Math.hypot(endPt.x-startPoint.x,endPt.y-startPoint.y))
         const midX=(startPoint.x+endPt.x)/2,midY=(startPoint.y+endPt.y)/2
-        drawLabel(ctx,lenMm.toFixed(1)+' mm',midX,midY-2/sc,'#00BCD4',sc)
+        drawLabel(ctx,(dimLocked?'🔒 ':'')+lenMm.toFixed(1)+' mm',midX,midY-2/sc,'#00BCD4',sc)
       } else {
       const hSnap=getGeoSnap(mousePos,lines,circles,arcs,startPoint,tKeyDown,splines,intersectionPts)
       let endPt,isTanEnd=false
@@ -1676,10 +1742,13 @@ export default function App() {
 
     } else if (tool!=='trim'&&tool!=='delete'&&tool!=='offset'&&tool!=='mirror'&&tool!=='movecopy'&&tool!=='rotatecopy'&&tool!=='resize'&&tool!=='trace'){
       if (tool==='line'&&pKeyDown){
-        // PERP mode idle — show perp foot on nearest line
+        // PERP mode idle — show perp foot on nearest line (plus the
+        // endpoint/midpoint marker too, when snapped onto one of those)
         const hit=findNearestLineForPerp(mousePos,lines,null)
-        if (hit) drawPerpIndicator(ctx,hit.foot.x,hit.foot.y,sc)
-        // No normal snap indicators — perp only
+        if (hit){
+          if (hit.isSnap) drawLineIndicator(ctx,hit.foot.x,hit.foot.y,hit.snapType,sc)
+          drawPerpIndicator(ctx,hit.foot.x,hit.foot.y,sc,hit.isSnap?14:0)
+        }
       } else {
         const{tracks}=applyTracking(mousePos,trackedPts)
         if (tracks.length) drawTracks(ctx,tracks,trackedPts,sc)
@@ -1694,7 +1763,7 @@ export default function App() {
       if (geo) drawLineIndicator(ctx,geo.x,geo.y,geo.type,sc)
     }
 
-  },[lines,circles,arcs,splines,selection,selectHover,selectLiveGeom,selectDimField,selectDimPending,selectDimAnchor,splinePoints,splineClosed,startPoint,circleCenter,circleTanA,circleTanB,mousePos,dimInput,dimLocked,angleInput,angleLocked,focusField,trackedPts,tool,deferredTangent,trimPreview,deletePreview,extendPreview,offsetEntity,offsetPreview,offsetDistInput,offsetDistLocked,offsetHover,mirrorSel,mirrorAccepted,mirrorPreview,mirrorP1,mirrorHover,moveCopySel,moveCopyAccepted,moveCopyMode,moveCopyCountInput,moveCopyHover,rotateCopySel,rotateCopyAccepted,rotateCopyMode,rotateCopyCountInput,rotateCopyHover,resizeSel,resizeAccepted,resizeScaleInput,resizeHover,filletSel,filletAccepted,filletRadiusInput,filletHover,filletPreview,dragSelectRect,viewTransform,canvasSize,tKeyDown,pKeyDown,perpSourceLineIdx,drawStyle,intersectionPts,joinHover,joinFirstPt,pageConfig,dims,dimToolPreview,dimToolPts,gridVisible,gridSizeMm])
+  },[lines,circles,arcs,splines,selection,selectHover,selectLiveGeom,selectDimField,selectDimPending,selectDimAnchor,splinePoints,splineClosed,startPoint,circleCenter,circleTanA,circleTanB,mousePos,dimInput,dimLocked,angleInput,angleLocked,focusField,trackedPts,tool,deferredTangent,trimPreview,deletePreview,extendPreview,offsetEntity,offsetPreview,offsetDistInput,offsetHover,mirrorSel,mirrorAccepted,mirrorPreview,mirrorP1,mirrorHover,moveCopySel,moveCopyAccepted,moveCopyMode,moveCopyCountInput,moveCopyHover,rotateCopySel,rotateCopyAccepted,rotateCopyMode,rotateCopyCountInput,rotateCopyHover,resizeSel,resizeAccepted,resizeScaleInput,resizeHover,filletSel,filletAccepted,filletRadiusInput,filletHover,filletPreview,dragSelectRect,viewTransform,canvasSize,tKeyDown,pKeyDown,perpSourceLineIdx,drawStyle,intersectionPts,joinHover,joinFirstPt,pageConfig,dims,dimToolPreview,dimToolPts,gridVisible,gridSizeMm])
 
   function handleMouseDown(e){
     if (e.button===1){e.preventDefault();isPanningRef.current=true;lastPanPosRef.current={x:e.clientX,y:e.clientY}}
@@ -1978,13 +2047,7 @@ export default function App() {
         if (hit) setOffsetEntity(hit)
       } else {
         // Second click — place the offset
-        if (!offsetPreview) return
-        commit(snapshot())
-        if (offsetPreview.kind==='line')   setLines(p=>[...p,{x1:offsetPreview.x1,y1:offsetPreview.y1,x2:offsetPreview.x2,y2:offsetPreview.y2,...(offsetPreview.style?{style:offsetPreview.style}:{})}])
-        if (offsetPreview.kind==='circle') setCircles(p=>[...p,{cx:offsetPreview.cx,cy:offsetPreview.cy,r:offsetPreview.r,...(offsetPreview.style?{style:offsetPreview.style}:{})}])
-        if (offsetPreview.kind==='arc')    setArcs(p=>[...p,{cx:offsetPreview.cx,cy:offsetPreview.cy,r:offsetPreview.r,startAngle:offsetPreview.startAngle,endAngle:offsetPreview.endAngle,...(offsetPreview.style?{style:offsetPreview.style}:{})}])
-        if (offsetPreview.kind==='spline') setSplines(p=>[...p,{points:offsetPreview.points,closed:offsetPreview.closed,polyline:offsetPreview.polyline,...(offsetPreview.style?{style:offsetPreview.style}:{})}])
-        resetOffset()
+        applyOffset()
       }
       return
     }
@@ -2096,20 +2159,13 @@ export default function App() {
         if (!hit) return
         const already=filletSel.findIndex(s=>s.idx===hit.idx)
         if (already>=0) setFilletSel(p=>p.filter((_,i)=>i!==already))
-        else if (filletSel.length<2) setFilletSel(p=>[...p,hit])
+        else if (filletSel.length<2){
+          setFilletSel(p=>[...p,hit])
+          if (filletSel.length===1) setFilletAccepted(true)
+        }
       } else {
         // Click applies the fillet (same as Enter)
-        if (!filletPreview||filletPreview.tooLarge) return
-        const{newL1,newL2,arc}=filletPreview
-        // Carry style from source lines through fillet
-        const s1=lines[filletSel[0].idx]?.style
-        const s2=lines[filletSel[1].idx]?.style
-        commit(snapshot())
-        setLines(p=>[...p.filter((_,i)=>!filletSel.some(s=>s.idx===i)),
-          s1?{...newL1,style:s1}:newL1,
-          s2?{...newL2,style:s2}:newL2])
-        setArcs(p=>[...p,arc])
-        resetFillet()
+        applyFillet()
       }
       return
     }
@@ -2148,23 +2204,7 @@ export default function App() {
         resetDrawState()
       } else {
         if (pKeyDown) {
-          let endPt
-          if (perpSourceLineIdx!==null && lines[perpSourceLineIdx]) {
-            // FROM mode: direction locked perpendicular to source line
-            const sl=lines[perpSourceLineIdx]
-            const dx=sl.x2-sl.x1, dy=sl.y2-sl.y1, len=Math.hypot(dx,dy)
-            if (len>1e-10) {
-              const px=-dy/len, py=dx/len
-              const t=(raw.x-startPoint.x)*px+(raw.y-startPoint.y)*py
-              endPt={x:startPoint.x+t*px, y:startPoint.y+t*py}
-            } else { endPt=raw }
-          } else {
-            // TO mode: snap to perp foot on nearest line
-            const hit=findNearestLineForPerp(raw,lines,perpSourceLineIdx)
-            endPt=hit
-              ? calcPerpFoot(startPoint.x,startPoint.y,hit.line.x1,hit.line.y1,hit.line.x2,hit.line.y2,true)
-              : raw
-          }
+          const endPt=computePerpEndPt(raw)
           commit(snapshot());setLines(p=>[...p,{x1:startPoint.x,y1:startPoint.y,x2:endPt.x,y2:endPt.y,...(drawStyle?{style:drawStyle}:{})}])
           resetDrawState()
           return
@@ -2273,7 +2313,6 @@ export default function App() {
     if (tool==='movecopy'&&!moveCopyAccepted&&moveCopySel.length>0) setMoveCopyAccepted(true)
     if (tool==='rotatecopy'&&!rotateCopyAccepted&&rotateCopySel.length>0) setRotateCopyAccepted(true)
     if (tool==='resize'&&!resizeAccepted&&resizeSel.length>0) setResizeAccepted(true)
-    if (tool==='fillet'&&!filletAccepted&&filletSel.length===2) setFilletAccepted(true)
   }
 
   function handleMouseMove(e){
@@ -2546,9 +2585,10 @@ export default function App() {
     if (tool==='offset'){
       if (e.key==='Escape'){resetOffset();return}
       if (offsetEntity){
-        if (e.key==='Tab'){e.preventDefault();if(offsetDistInput&&parseFloat(offsetDistInput)>0)setOffsetDistLocked(p=>!p);return}
-        if (e.key==='Backspace'){setOffsetDistInput(p=>p.slice(0,-1));setOffsetDistLocked(false);return}
-        if (/^[0-9.]$/.test(e.key)){setOffsetDistLocked(false);setOffsetDistInput(p=>p+e.key);return}
+        // Typing only sets the distance — placing still requires a canvas click,
+        // since the click position is what picks which side to offset toward.
+        if (e.key==='Backspace'){setOffsetDistInput(p=>p.slice(0,-1));return}
+        if (/^[0-9.]$/.test(e.key)){setOffsetDistInput(p=>p+e.key);return}
       }
       return
     }
@@ -2609,26 +2649,9 @@ export default function App() {
 
     if (tool==='fillet'){
       if (e.key==='Escape'){resetFillet();return}
-      if (!filletAccepted){
-        if (e.key==='Tab'){e.preventDefault();if(filletSel.length===2)setFilletAccepted(true);return}
-        return
-      }
-      // Accepted — type radius then Enter/click to apply
-      if (e.key==='Enter'){
-        e.preventDefault()
-        if (!filletPreview||filletPreview.tooLarge) return
-        const{newL1,newL2,arc}=filletPreview
-        // Carry style from source lines through fillet
-        const s1=lines[filletSel[0].idx]?.style
-        const s2=lines[filletSel[1].idx]?.style
-        commit(snapshot())
-        setLines(p=>[...p.filter((_,i)=>!filletSel.some(s=>s.idx===i)),
-          s1?{...newL1,style:s1}:newL1,
-          s2?{...newL2,style:s2}:newL2])
-        setArcs(p=>[...p,arc])
-        resetFillet()
-        return
-      }
+      if (filletSel.length<2) return
+      // Both lines picked — type radius then Enter/click to apply
+      if (e.key==='Enter'){e.preventDefault();applyFillet();return}
       if (e.key==='Backspace'){setFilletRadiusInput(p=>p.slice(0,-1));return}
       if (/^[0-9.]$/.test(e.key)){setFilletRadiusInput(p=>p+e.key);return}
       return
@@ -2649,6 +2672,13 @@ export default function App() {
       }
       if (e.key==='Backspace'){setDimInput(p=>p.slice(0,-1));return}
       if (/^[0-9.]$/.test(e.key)){setDimInput(p=>p+e.key);return}
+      return
+    }
+
+    if (tool==='line'&&startPoint&&!deferredTangent){
+      // Real Length/Angle boxes in LineSnapPanel own typing now — this just
+      // keeps Esc working. Placing the line still only happens via canvas click.
+      if (e.key==='Escape'){resetDrawState();return}
       return
     }
 
@@ -2706,9 +2736,12 @@ export default function App() {
         if (deferredTangent) return { step:null, total:null, color:'#F48FB1',
           action:'TAN — click end point',
           hints:[K('T','toggle off'), K('Esc')] }
+        if (pKeyDown) return { step:null, total:null, color:'#00BCD4',
+          action:`${dimLocked?'🔒 ':''}${dimInput||(lineLiveLenMm!=null?lineLiveLenMm.toFixed(1):'—')} mm`,
+          hints:[K('type','length'), K('click','draw'), K('Esc')] }
         return { step:null, total:null, color:c,
-          action:`${dimLocked?'🔒 ':''}${dimInput||'—'} mm  ·  ${angleLocked?'🔒 ':''}${angleInput||'—'}°`,
-          hints:[K('Tab','toggle field'), K('Enter','lock'), K('T','tangent'), K('Esc')] }
+          action:`${dimLocked?'🔒 ':''}${dimInput||(lineLiveLenMm!=null?lineLiveLenMm.toFixed(1):'—')} mm  ·  ${angleLocked?'🔒 ':''}${angleInput||(lineLiveAngleDeg!=null?lineLiveAngleDeg.toFixed(1):'—')}°`,
+          hints:[K('type','length/angle'), K('click','draw'), K('T','tangent'), K('Esc')] }
       }
       return { step:null, total:null, color:c,
         action:'Click first point',
@@ -2723,8 +2756,8 @@ export default function App() {
         action:'TAN — click 2nd circle',
         hints:[K('Esc')] }
       if (circleCenter) return { step:2, total:2, color:c,
-        action:`${dimLocked?'🔒 R ':'R '}${dimInput||'—'} mm`,
-        hints:[K('type + Tab','exact radius'), K('T','tangent'), K('Esc')] }
+        action:`${dimLocked?'🔒 R ':'R ~'}${dimInput||(mousePos?pxToMm(Math.hypot(mousePos.x-circleCenter.x,mousePos.y-circleCenter.y)).toFixed(1):'—')} mm`,
+        hints:[K('type','exact radius'), K('click','place'), K('T','tangent'), K('Esc')] }
       return { step:1, total:2, color:c,
         action:'Click centre point',
         hints:[K('T','tangent to 2 circles')] }
@@ -2740,20 +2773,18 @@ export default function App() {
     }
 
     if (tool==='offset') {
-      if (!offsetEntity) return { step:1, total:3, color:c,
+      if (!offsetEntity) return { step:1, total:2, color:c,
         action: offsetHover ? `Click to select ${offsetHover.kind}` : 'Hover entity to select',
         hints:[] }
-      const d = offsetDistLocked ? parseFloat(offsetDistInput)||0
+      const d = offsetDistInput ? parseFloat(offsetDistInput)||0
         : (mousePos ? pxToMm(distToEntity(mousePos,
             offsetEntity.kind==='line'?lines[offsetEntity.idx]:
             offsetEntity.kind==='circle'?circles[offsetEntity.idx]:
             offsetEntity.kind==='arc'?arcs[offsetEntity.idx]:splines[offsetEntity.idx],
             offsetEntity.kind)) : 0)
-      return { step:'2+3', total:3, color:c,
-        action:`Move to side · ${d.toFixed(1)} mm`,
-        hints: offsetDistLocked
-          ? [K('Tab','unlock dist'), K('click','place'), K('Esc')]
-          : [K('type + Enter','lock dist'), K('click','place'), K('Esc')] }
+      return { step:2, total:2, color:c,
+        action:`Move to side · ${offsetDistInput?'':'~'}${d.toFixed(1)} mm`,
+        hints:[K('type','exact distance'), K('click','place'), K('Esc')] }
     }
 
     if (tool==='dim') {
@@ -2847,12 +2878,9 @@ export default function App() {
         if (filletSel.length===0) return { step:1, total:3, color:c,
           action:'Click first line',
           hints:[] }
-        if (filletSel.length===1) return { step:2, total:3, color:c,
+        return { step:2, total:3, color:c,
           action:'Click second line',
           hints:[K('Esc')] }
-        return { step:2, total:3, color:c,
-          action:'2 lines selected',
-          hints:[K('Tab','accept'), K('Esc')] }
       }
       if (filletPreview?.tooLarge) return { step:3, total:3, color:'#EF9A9A',
         action:`R ${filletRadiusInput} mm — too large`,
@@ -2919,6 +2947,21 @@ export default function App() {
   const btnBase={border:'none',borderRadius:5,cursor:'pointer',padding:4,display:'flex',alignItems:'center',justifyContent:'center',width:68,height:68,transition:'background 0.1s'}
   const zoomPct=Math.round(viewTransform.scale*100)
 
+  // Live length/angle for the LineSnapPanel's placeholder text while mid-draw
+  let lineLiveLenMm=null, lineLiveAngleDeg=null
+  if (tool==='line'&&startPoint&&mousePos&&!deferredTangent){
+    const endPt=pKeyDown?computePerpEndPt(mousePos):computeEnd(startPoint,mousePos,trackedPts)
+    lineLiveLenMm=pxToMm(Math.hypot(endPt.x-startPoint.x,endPt.y-startPoint.y))
+    lineLiveAngleDeg=computeLiveAngle(startPoint,endPt)
+  }
+
+  // Live radius for the CircleSnapPanel's placeholder text while mid-draw
+  let circleLiveRadiusMm=null
+  if (tool==='circle'&&mousePos){
+    if (circleTanA&&circleTanB) circleLiveRadiusMm=pxToMm(tanCircleGuessRadius(mousePos))
+    else if (circleCenter) circleLiveRadiusMm=pxToMm(Math.hypot(mousePos.x-circleCenter.x,mousePos.y-circleCenter.y))
+  }
+
   return (
     <div style={{display:'flex',flexDirection:'column',height:'100vh',outline:'none'}} tabIndex={0} onKeyDown={handleKeyDown}>
       {splashOpen&&<SplashScreen onChoose={which=>{setSplashOpen(false);if(which==='open')loadFileRef.current?.click()}}/>}
@@ -2950,6 +2993,14 @@ export default function App() {
                 tKeyDown={tKeyDown} pKeyDown={pKeyDown}
                 onToggleT={()=>setTKeyDown(p=>!p)}
                 onToggleP={()=>setPKeyDown(p=>!p)}
+                drawing={!!startPoint&&!deferredTangent}
+                dimInput={dimInput} angleInput={angleInput}
+                dimLocked={dimLocked} angleLocked={angleLocked}
+                onChangeDim={v=>{setDimLocked(false);setDimInput(v)}}
+                onChangeAngle={v=>{setAngleLocked(false);setAngleInput(v)}}
+                onApply={applyLineDims}
+                liveLenMm={lineLiveLenMm}
+                liveAngleDeg={lineLiveAngleDeg}
               />
             )}
             {t==='circle'&&tool==='circle'&&(
@@ -2958,6 +3009,11 @@ export default function App() {
                 tKeyDown={tKeyDown}
                 onToggleT={()=>setTKeyDown(p=>!p)}
                 circleTanA={circleTanA} circleTanB={circleTanB}
+                circleCenter={circleCenter}
+                dimInput={dimInput} dimLocked={dimLocked}
+                onChangeDim={v=>{setDimLocked(false);setDimInput(v)}}
+                onApply={applyCircleRadius}
+                liveRadiusMm={circleLiveRadiusMm}
               />
             )}
             {t==='spline'&&tool==='spline'&&(
@@ -2966,6 +3022,28 @@ export default function App() {
                 splineClosed={splineClosed}
                 onToggleC={()=>setSplineClosed(p=>!p)}
                 splinePoints={splinePoints}
+              />
+            )}
+            {t==='fillet'&&tool==='fillet'&&filletSel.length===2&&(
+              <FilletRadiusPanel
+                toolColor={activeColor}
+                value={filletRadiusInput}
+                onChange={setFilletRadiusInput}
+                onApply={applyFillet}
+                tooLarge={!!filletPreview?.tooLarge}
+              />
+            )}
+            {t==='offset'&&tool==='offset'&&offsetEntity&&(
+              <OffsetDistPanel
+                toolColor={activeColor}
+                value={offsetDistInput}
+                onChange={setOffsetDistInput}
+                canApply={!!offsetPreview}
+                liveValueMm={mousePos?pxToMm(distToEntity(mousePos,
+                  offsetEntity.kind==='line'?lines[offsetEntity.idx]:
+                  offsetEntity.kind==='circle'?circles[offsetEntity.idx]:
+                  offsetEntity.kind==='arc'?arcs[offsetEntity.idx]:splines[offsetEntity.idx],
+                  offsetEntity.kind)):null}
               />
             )}
           </div>
@@ -3054,7 +3132,7 @@ export default function App() {
             // draw tools
             startPoint, circleCenter, splinePoints,
             // single-action tools
-            offsetEntity, offsetDistLocked, offsetPreview,
+            offsetEntity, offsetDistInput, offsetPreview,
             trimPreview, extendPreview, deletePreview,
             joinFirstPt,
             // dim tool

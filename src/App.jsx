@@ -20,6 +20,8 @@ import TextPanel from './tools/TextPanel.jsx'
 import PageSetupPanel from './tools/PageSetupPanel.jsx'
 import GuidePanel from './tools/GuidePanel.jsx'
 import CopyModePanel from './tools/CopyModePanel.jsx'
+import ResizeScalePanel from './tools/ResizeScalePanel.jsx'
+import MirrorPanel from './tools/MirrorPanel.jsx'
 import LineSnapPanel from './tools/LineSnapPanel.jsx'
 import CircleSnapPanel from './tools/CircleSnapPanel.jsx'
 import SplineSnapPanel from './tools/SplineSnapPanel.jsx'
@@ -27,6 +29,7 @@ import SaveAsPanel from './tools/SaveAsPanel.jsx'
 import SplashScreen from './tools/SplashScreen.jsx'
 import FilletRadiusPanel from './tools/FilletRadiusPanel.jsx'
 import OffsetDistPanel from './tools/OffsetDistPanel.jsx'
+import SelectDimPanel from './tools/SelectDimPanel.jsx'
 import {
   IconLine, IconCircle, IconTrim, IconDelete, IconExtend, IconOffset,
   IconMirror, IconMoveCopy, IconRotateCopy, IconResize, IconFillet, IconTrace, IconGuide,
@@ -290,6 +293,105 @@ export default function App() {
     setSelectDimField(null);setSelectDimPending({});setSelectDimAnchor('mc')
     selectDragHandleRef.current=null;selectDragStartRef.current=null
     selectSnapshotRef.current=null;selectBBoxRef.current=null
+  }
+  // Shared by the blind Tab/Enter flow and the visible SelectDimPanel's Apply button.
+  function applySelectDims(finalPending){
+    commit(snapshot())
+    if (selection.length===1){
+      const ent=selection[0]
+      if (ent.kind==='line'){
+        const l=lines[ent.idx]
+        const dx=l.x2-l.x1,dy=l.y2-l.y1
+        const oldLen=Math.hypot(dx,dy)
+        let newLen=oldLen,newAngleRad=Math.atan2(dy,dx)
+        if (finalPending.length&&parseFloat(finalPending.length)>0)
+          newLen=mmToPx(parseFloat(finalPending.length))
+        if (finalPending.angle&&parseFloat(finalPending.angle)>=0)
+          newAngleRad=(360-parseFloat(finalPending.angle))*Math.PI/180
+        const nx=Math.cos(newAngleRad),ny=Math.sin(newAngleRad)
+        // Determine fixed point from anchor handle
+        const bbox2=selectionBBox(selection,lines,circles,arcs,splines)
+        const handles2=bbox2?getBBoxHandles(bbox2):null
+        const anchorPt=handles2?handles2[selectDimAnchor]||handles2['mc']:null
+        if (!anchorPt||selectDimAnchor==='mc'){
+          // Anchor = midpoint
+          const mx=(l.x1+l.x2)/2,my=(l.y1+l.y2)/2
+          setLines(p=>p.map((ln,i)=>i===ent.idx?{...ln,x1:mx-nx*newLen/2,y1:my-ny*newLen/2,x2:mx+nx*newLen/2,y2:my+ny*newLen/2}:ln))
+        } else {
+          // Find which endpoint is closest to anchor handle — that end stays fixed
+          const d1=Math.hypot(l.x1-anchorPt.x,l.y1-anchorPt.y)
+          const d2=Math.hypot(l.x2-anchorPt.x,l.y2-anchorPt.y)
+          if (d1<=d2){
+            // x1,y1 stays fixed — x2,y2 moves
+            setLines(p=>p.map((ln,i)=>i===ent.idx?{...ln,x2:l.x1+nx*newLen,y2:l.y1+ny*newLen}:ln))
+          } else {
+            // x2,y2 stays fixed — x1,y1 moves
+            setLines(p=>p.map((ln,i)=>i===ent.idx?{...ln,x1:l.x2-nx*newLen,y1:l.y2-ny*newLen}:ln))
+          }
+        }
+      } else if (ent.kind==='circle'&&finalPending.radius&&parseFloat(finalPending.radius)>0){
+        const c=circles[ent.idx]
+        const newR=mmToPx(parseFloat(finalPending.radius))
+        const bbox2=selectionBBox(selection,lines,circles,arcs,splines)
+        const handles2=bbox2?getBBoxHandles(bbox2):null
+        const anchorPt=handles2?handles2[selectDimAnchor]||handles2['mc']:null
+        if (!anchorPt||selectDimAnchor==='mc'){
+          // Centre stays fixed
+          setCircles(p=>p.map((ci,i)=>i===ent.idx?{...ci,r:newR}:ci))
+        } else {
+          // Anchor point stays fixed — shift centre
+          // The anchor handle is on the circle's bbox edge
+          // New centre = anchor + offset scaled to new radius
+          const ocx=c.cx,ocy=c.cy,or=c.r
+          const fromAnchorX=ocx-anchorPt.x,fromAnchorY=ocy-anchorPt.y
+          const dist=Math.hypot(fromAnchorX,fromAnchorY)||1
+          const newCx=anchorPt.x+(fromAnchorX/dist)*newR
+          const newCy=anchorPt.y+(fromAnchorY/dist)*newR
+          setCircles(p=>p.map((ci,i)=>i===ent.idx?{...ci,cx:newCx,cy:newCy,r:newR}:ci))
+        }
+      } else if (ent.kind==='arc'&&(finalPending.radius||finalPending.angle)){
+        const a=arcs[ent.idx]
+        let r=a.r,span=norm2pi(a.endAngle-a.startAngle)
+        if (finalPending.radius&&parseFloat(finalPending.radius)>0) r=mmToPx(parseFloat(finalPending.radius))
+        if (finalPending.angle&&parseFloat(finalPending.angle)>0) span=parseFloat(finalPending.angle)*Math.PI/180
+        if (finalPending.radius&&parseFloat(finalPending.radius)>0){
+          const bbox2=selectionBBox(selection,lines,circles,arcs,splines)
+          const handles2=bbox2?getBBoxHandles(bbox2):null
+          const anchorPt=handles2?handles2[selectDimAnchor]||handles2['mc']:null
+          if (anchorPt&&selectDimAnchor!=='mc'){
+            const fromAnchorX=a.cx-anchorPt.x,fromAnchorY=a.cy-anchorPt.y
+            const dist=Math.hypot(fromAnchorX,fromAnchorY)||1
+            const newCx=anchorPt.x+(fromAnchorX/dist)*r
+            const newCy=anchorPt.y+(fromAnchorY/dist)*r
+            const mid=(a.startAngle+a.endAngle)/2
+            setArcs(p=>p.map((ar,i)=>i===ent.idx?{...ar,cx:newCx,cy:newCy,r,startAngle:mid-span/2,endAngle:mid+span/2}:ar))
+          } else {
+            const mid=(a.startAngle+a.endAngle)/2
+            setArcs(p=>p.map((ar,i)=>i===ent.idx?{...ar,r,startAngle:mid-span/2,endAngle:mid+span/2}:ar))
+          }
+        } else {
+          const mid=(a.startAngle+a.endAngle)/2
+          setArcs(p=>p.map((ar,i)=>i===ent.idx?{...ar,r,startAngle:mid-span/2,endAngle:mid+span/2}:ar))
+        }
+      }
+    } else {
+      // Multi-select: apply W and/or H independently
+      const bbox2=selectionBBox(selection,lines,circles,arcs,splines)
+      if (bbox2){
+        // Determine anchor world point from anchor handle id
+        const handles=getBBoxHandles(bbox2)
+        const anchorH=handles[selectDimAnchor]||handles['mc']
+        let sx=1,sy=1
+        if (finalPending.width&&parseFloat(finalPending.width)>0)
+          sx=mmToPx(parseFloat(finalPending.width))/bbox2.w
+        if (finalPending.height&&parseFloat(finalPending.height)>0)
+          sy=mmToPx(parseFloat(finalPending.height))/bbox2.h
+        const result=applySelectionTransform(selection,lines,circles,arcs,splines,{x:anchorH.x,y:anchorH.y},sx,sy,0,0)
+        setLines(result.lines);setCircles(result.circles);setArcs(result.arcs);setSplines(result.splines)
+      }
+    }
+    setSelectDimField(null);setSelectDimPending({});setSelectDimAnchor('mc')
+    setSelectDimInput('')
   }
   function resetSpline(){
     setSplinePoints([]);setSplineClosed(false)
@@ -1432,7 +1534,7 @@ export default function App() {
                 const bx=(bbox.x1+bbox.x2)/2
                 drawLabel(ctx,(lenActive?'✏ ':'')+lenText,bx,bbox.y1-36/sc,lenActive?activeColor:inactiveColor,sc)
                 drawLabel(ctx,(angActive?'✏ ':'')+angText,bx,bbox.y1-18/sc,angActive?activeColor:inactiveColor,sc)
-                if (!selectDimField) drawLabel(ctx,'Tab to edit',bx,bbox.y1-54/sc,'#444',sc)
+                if (!selectDimField) drawLabel(ctx,'Edit in box →',bx,bbox.y1-54/sc,'#444',sc)
               // 3x3 anchor grid — above bbox, centred
               {
                 const gx=(bbox.x1+bbox.x2)/2,gy=bbox.y1-80/sc
@@ -1461,7 +1563,7 @@ export default function App() {
                 const radActive=selectDimField==='radius'
                 const rText='R '+(radActive&&selectDimInput?selectDimInput:r.toFixed(2))+' mm'
                 drawLabel(ctx,(radActive?'✏ ':'')+rText,(bbox.x1+bbox.x2)/2,bbox.y1-18/sc,radActive?activeColor:inactiveColor,sc)
-                if (!selectDimField) drawLabel(ctx,'Tab to edit',(bbox.x1+bbox.x2)/2,bbox.y1-36/sc,'#444',sc)
+                if (!selectDimField) drawLabel(ctx,'Edit in box →',(bbox.x1+bbox.x2)/2,bbox.y1-36/sc,'#444',sc)
                 else drawLabel(ctx,'click dot=anchor',(bbox.x1+bbox.x2)/2,bbox.y1-36/sc,'#FFD600',sc)
                 // 3x3 anchor grid — above bbox, centred
                 {
@@ -1493,7 +1595,7 @@ export default function App() {
                 const bx=(bbox.x1+bbox.x2)/2
                 drawLabel(ctx,(radActive?'✏ ':'')+rText,bx,bbox.y1-36/sc,radActive?activeColor:inactiveColor,sc)
                 drawLabel(ctx,(angActive?'✏ ':'')+aText,bx,bbox.y1-18/sc,angActive?activeColor:inactiveColor,sc)
-                if (!selectDimField) drawLabel(ctx,'Tab to edit',bx,bbox.y1-54/sc,'#444',sc)
+                if (!selectDimField) drawLabel(ctx,'Edit in box →',bx,bbox.y1-54/sc,'#444',sc)
               // 3x3 anchor grid — above bbox, centred
               {
                 const gx=(bbox.x1+bbox.x2)/2,gy=bbox.y1-80/sc
@@ -1527,7 +1629,7 @@ export default function App() {
             const bx=(bbox.x1+bbox.x2)/2
             drawLabel(ctx,(wActive?'✏ ':'')+wText,bx,bbox.y1-36/sc,wActive?activeColor:'#64B5F6',sc)
             drawLabel(ctx,(hActive?'✏ ':'')+hText,bx,bbox.y1-18/sc,hActive?activeColor:'#64B5F6',sc)
-            if (!selectDimField) drawLabel(ctx,`${selection.length} entities · Tab to edit`,bx,bbox.y1-54/sc,'#444',sc)
+            if (!selectDimField) drawLabel(ctx,`${selection.length} entities · Edit in box →`,bx,bbox.y1-54/sc,'#444',sc)
             // 3x3 anchor grid — above bbox
             {
               const gx=(bbox.x1+bbox.x2)/2,gy=bbox.y1-80/sc
@@ -2470,103 +2572,7 @@ export default function App() {
           const finalPending = selectDimField
             ? {...selectDimPending,[selectDimField]:selectDimInput}
             : selectDimPending
-          // Apply all pending values in one commit
-          commit(snapshot())
-          if (selection.length===1){
-            const ent=selection[0]
-            if (ent.kind==='line'){
-              const l=lines[ent.idx]
-              const dx=l.x2-l.x1,dy=l.y2-l.y1
-              const oldLen=Math.hypot(dx,dy)
-              let newLen=oldLen,newAngleRad=Math.atan2(dy,dx)
-              if (finalPending.length&&parseFloat(finalPending.length)>0)
-                newLen=mmToPx(parseFloat(finalPending.length))
-              if (finalPending.angle&&parseFloat(finalPending.angle)>=0)
-                newAngleRad=(360-parseFloat(finalPending.angle))*Math.PI/180
-              const nx=Math.cos(newAngleRad),ny=Math.sin(newAngleRad)
-              // Determine fixed point from anchor handle
-              const bbox2=selectionBBox(selection,lines,circles,arcs,splines)
-              const handles2=bbox2?getBBoxHandles(bbox2):null
-              const anchorPt=handles2?handles2[selectDimAnchor]||handles2['mc']:null
-              if (!anchorPt||selectDimAnchor==='mc'){
-                // Anchor = midpoint
-                const mx=(l.x1+l.x2)/2,my=(l.y1+l.y2)/2
-                setLines(p=>p.map((ln,i)=>i===ent.idx?{...ln,x1:mx-nx*newLen/2,y1:my-ny*newLen/2,x2:mx+nx*newLen/2,y2:my+ny*newLen/2}:ln))
-              } else {
-                // Find which endpoint is closest to anchor handle — that end stays fixed
-                const d1=Math.hypot(l.x1-anchorPt.x,l.y1-anchorPt.y)
-                const d2=Math.hypot(l.x2-anchorPt.x,l.y2-anchorPt.y)
-                if (d1<=d2){
-                  // x1,y1 stays fixed — x2,y2 moves
-                  setLines(p=>p.map((ln,i)=>i===ent.idx?{...ln,x2:l.x1+nx*newLen,y2:l.y1+ny*newLen}:ln))
-                } else {
-                  // x2,y2 stays fixed — x1,y1 moves
-                  setLines(p=>p.map((ln,i)=>i===ent.idx?{...ln,x1:l.x2-nx*newLen,y1:l.y2-ny*newLen}:ln))
-                }
-              }
-            } else if (ent.kind==='circle'&&finalPending.radius&&parseFloat(finalPending.radius)>0){
-              const c=circles[ent.idx]
-              const newR=mmToPx(parseFloat(finalPending.radius))
-              const bbox2=selectionBBox(selection,lines,circles,arcs,splines)
-              const handles2=bbox2?getBBoxHandles(bbox2):null
-              const anchorPt=handles2?handles2[selectDimAnchor]||handles2['mc']:null
-              if (!anchorPt||selectDimAnchor==='mc'){
-                // Centre stays fixed
-                setCircles(p=>p.map((ci,i)=>i===ent.idx?{...ci,r:newR}:ci))
-              } else {
-                // Anchor point stays fixed — shift centre
-                // The anchor handle is on the circle's bbox edge
-                // New centre = anchor + offset scaled to new radius
-                const ocx=c.cx,ocy=c.cy,or=c.r
-                const fromAnchorX=ocx-anchorPt.x,fromAnchorY=ocy-anchorPt.y
-                const dist=Math.hypot(fromAnchorX,fromAnchorY)||1
-                const newCx=anchorPt.x+(fromAnchorX/dist)*newR
-                const newCy=anchorPt.y+(fromAnchorY/dist)*newR
-                setCircles(p=>p.map((ci,i)=>i===ent.idx?{...ci,cx:newCx,cy:newCy,r:newR}:ci))
-              }
-            } else if (ent.kind==='arc'&&(finalPending.radius||finalPending.angle)){
-              const a=arcs[ent.idx]
-              let r=a.r,span=norm2pi(a.endAngle-a.startAngle)
-              if (finalPending.radius&&parseFloat(finalPending.radius)>0) r=mmToPx(parseFloat(finalPending.radius))
-              if (finalPending.angle&&parseFloat(finalPending.angle)>0) span=parseFloat(finalPending.angle)*Math.PI/180
-              if (finalPending.radius&&parseFloat(finalPending.radius)>0){
-                const bbox2=selectionBBox(selection,lines,circles,arcs,splines)
-                const handles2=bbox2?getBBoxHandles(bbox2):null
-                const anchorPt=handles2?handles2[selectDimAnchor]||handles2['mc']:null
-                if (anchorPt&&selectDimAnchor!=='mc'){
-                  const fromAnchorX=a.cx-anchorPt.x,fromAnchorY=a.cy-anchorPt.y
-                  const dist=Math.hypot(fromAnchorX,fromAnchorY)||1
-                  const newCx=anchorPt.x+(fromAnchorX/dist)*r
-                  const newCy=anchorPt.y+(fromAnchorY/dist)*r
-                  const mid=(a.startAngle+a.endAngle)/2
-                  setArcs(p=>p.map((ar,i)=>i===ent.idx?{...ar,cx:newCx,cy:newCy,r,startAngle:mid-span/2,endAngle:mid+span/2}:ar))
-                } else {
-                  const mid=(a.startAngle+a.endAngle)/2
-                  setArcs(p=>p.map((ar,i)=>i===ent.idx?{...ar,r,startAngle:mid-span/2,endAngle:mid+span/2}:ar))
-                }
-              } else {
-                const mid=(a.startAngle+a.endAngle)/2
-                setArcs(p=>p.map((ar,i)=>i===ent.idx?{...ar,r,startAngle:mid-span/2,endAngle:mid+span/2}:ar))
-              }
-            }
-          } else {
-            // Multi-select: apply W and/or H independently
-            const bbox2=selectionBBox(selection,lines,circles,arcs,splines)
-            if (bbox2){
-              // Determine anchor world point from anchor handle id
-              const handles=getBBoxHandles(bbox2)
-              const anchorH=handles[selectDimAnchor]||handles['mc']
-              let sx=1,sy=1
-              if (finalPending.width&&parseFloat(finalPending.width)>0)
-                sx=mmToPx(parseFloat(finalPending.width))/bbox2.w
-              if (finalPending.height&&parseFloat(finalPending.height)>0)
-                sy=mmToPx(parseFloat(finalPending.height))/bbox2.h
-              const result=applySelectionTransform(selection,lines,circles,arcs,splines,{x:anchorH.x,y:anchorH.y},sx,sy,0,0)
-              setLines(result.lines);setCircles(result.circles);setArcs(result.arcs);setSplines(result.splines)
-            }
-          }
-          setSelectDimField(null);setSelectDimPending({});setSelectDimAnchor('mc')
-          setSelectDimInput('')
+          applySelectDims(finalPending)
           return
         }
         if (e.key==='Escape'){setSelectDimField(null);setSelectDimPending({});setSelectDimInput('');return}
@@ -2725,7 +2731,7 @@ export default function App() {
         hints:[K('Tab','next field'), K('Enter','apply'), K('Esc')] }
       if (selection.length>0) return { step:2, total:3, color:c,
         action:`${selection.length} selected`,
-        hints:[K('Tab','edit dims'), K('H','dash'), K('D','construction'), K('Del','delete')] }
+        hints:[K('box','edit dims'), K('H','dash'), K('D','construction'), K('Del','delete')] }
       return { step:1, total:3, color:c,
         action:'Click to select',
         hints:[K('Shift+click','add'), K('drag','window')] }
@@ -2806,7 +2812,7 @@ export default function App() {
           hints:[K('Tab','accept')] }
         return { step:2, total:4, color:c,
           action:`${mirrorSel.length} selected`,
-          hints:[K('Tab','accept'), K('Esc')] }
+          hints:[K('click Done','accept'), K('Esc')] }
       }
       if (!mirrorP1) return { step:3, total:4, color:c,
         action:'Click mirror line pt 1',
@@ -2825,7 +2831,7 @@ export default function App() {
           hints:[K('M','move'), K('C','copy'), K('Tab','accept')] }
         return { step:2, total:5, color:c,
           action:`${moveCopySel.length} selected  [${modeLabel}]`,
-          hints:[K('C','switch to copy'), K('Tab','accept'), K('Esc')] }
+          hints:[K('C','switch to copy'), K('click Done','accept'), K('Esc')] }
       }
       if (!startPoint) return { step: moveCopyMode==='copy' ? '3+4' : '4', total:5, color:c,
         action:`Click base point  [${modeLabel}]`,
@@ -2846,7 +2852,7 @@ export default function App() {
           hints:[K('R','rotate'), K('C','copy'), K('Tab','accept')] }
         return { step:2, total:5, color:c,
           action:`${rotateCopySel.length} selected  [${modeLabel}]`,
-          hints:[K('C','switch to copy'), K('Tab','accept'), K('Esc')] }
+          hints:[K('C','switch to copy'), K('click Done','accept'), K('Esc')] }
       }
       if (!startPoint) return { step: rotateCopyMode==='copy' ? '3+4' : '4', total:5, color:c,
         action:`Click centre point  [${modeLabel}]`,
@@ -2865,7 +2871,7 @@ export default function App() {
           hints:[K('Tab','accept')] }
         return { step:2, total:3, color:c,
           action:`${resizeSel.length} selected`,
-          hints:[K('Tab','accept'), K('Esc')] }
+          hints:[K('click Done','accept'), K('Esc')] }
       }
       const s = parseFloat(resizeScaleInput)
       return { step:3, total:3, color:c,
@@ -2962,9 +2968,69 @@ export default function App() {
     else if (circleCenter) circleLiveRadiusMm=pxToMm(Math.hypot(mousePos.x-circleCenter.x,mousePos.y-circleCenter.y))
   }
 
+  // Select-tool: real input-box panel, positioned near the current selection
+  let selectDimPanel=null
+  if (tool==='select'&&selection.length>0&&canvasRef.current){
+    const curLines   = selectLiveGeom?.lines   || lines
+    const curCircles = selectLiveGeom?.circles || circles
+    const curArcs    = selectLiveGeom?.arcs    || arcs
+    const curSplines = selectLiveGeom?.splines || splines
+    const bbox=selectionBBox(selection,curLines,curCircles,curArcs,curSplines)
+    if (bbox){
+      let fields=[],live={}
+      if (selection.length===1){
+        const e0=selection[0]
+        if (e0.kind==='line'){
+          const l=curLines[e0.idx]
+          if (l){
+            const len=pxToMm(Math.hypot(l.x2-l.x1,l.y2-l.y1))
+            let ang=Math.atan2(-(l.y2-l.y1),l.x2-l.x1)*180/Math.PI;if(ang<0)ang+=360
+            fields=[{key:'length',label:'Length',unit:'mm'},{key:'angle',label:'Angle',unit:'°'}]
+            live={length:len,angle:ang}
+          }
+        } else if (e0.kind==='circle'){
+          const c=curCircles[e0.idx]
+          if (c){ fields=[{key:'radius',label:'Radius',unit:'mm'}]; live={radius:pxToMm(c.r)} }
+        } else if (e0.kind==='arc'){
+          const a=curArcs[e0.idx]
+          if (a){
+            const span=norm2pi(a.endAngle-a.startAngle)*180/Math.PI
+            fields=[{key:'radius',label:'Radius',unit:'mm'},{key:'angle',label:'Angle',unit:'°'}]
+            live={radius:pxToMm(a.r),angle:span}
+          }
+        }
+      } else {
+        fields=[{key:'width',label:'Width',unit:'mm'},{key:'height',label:'Height',unit:'mm'}]
+        live={width:pxToMm(bbox.w),height:pxToMm(bbox.h)}
+      }
+      if (fields.length){
+        const sc=viewTransform.scale
+        const rect=canvasRef.current.getBoundingClientRect()
+        const screenX=bbox.x2*sc+viewTransform.x
+        const screenY=bbox.y1*sc+viewTransform.y
+        selectDimPanel={
+          left:rect.left+screenX+18,
+          top:Math.max(rect.top+8,rect.top+screenY-20),
+          fields, live,
+        }
+      }
+    }
+  }
+
   return (
     <div style={{display:'flex',flexDirection:'column',height:'100vh',outline:'none'}} tabIndex={0} onKeyDown={handleKeyDown}>
       {splashOpen&&<SplashScreen onChoose={which=>{setSplashOpen(false);if(which==='open')loadFileRef.current?.click()}}/>}
+      {selectDimPanel&&(
+        <SelectDimPanel
+          style={{position:'fixed',left:selectDimPanel.left,top:selectDimPanel.top}}
+          toolColor="#64B5F6"
+          fields={selectDimPanel.fields}
+          liveValues={selectDimPanel.live}
+          pending={selectDimPending}
+          onChangeField={(key,val)=>setSelectDimPending(p=>({...p,[key]:val}))}
+          onApply={()=>applySelectDims(selectDimPending)}
+        />
+      )}
       {/* ── Retro CAD 2D title bar ── */}
       <div style={{
         height:46,flexShrink:0,display:'flex',alignItems:'center',justifyContent:'center',
@@ -3085,6 +3151,8 @@ export default function App() {
                   onSetMode={setMoveCopyMode}
                   onSetCount={n=>setMoveCopyCountInput(String(Math.max(1,Math.min(100,n))))}
                   locked={!!startPoint}
+                  selCount={moveCopySel.length} accepted={moveCopyAccepted}
+                  onAccept={()=>setMoveCopyAccepted(true)}
                 />
               )}
               {t==='rotatecopy'&&tool==='rotatecopy'&&(
@@ -3095,6 +3163,25 @@ export default function App() {
                   onSetMode={setRotateCopyMode}
                   onSetCount={n=>setRotateCopyCountInput(String(Math.max(1,Math.min(100,n))))}
                   locked={!!startPoint}
+                  selCount={rotateCopySel.length} accepted={rotateCopyAccepted}
+                  onAccept={()=>setRotateCopyAccepted(true)}
+                />
+              )}
+              {t==='resize'&&tool==='resize'&&(
+                <ResizeScalePanel
+                  toolColor={activeColor}
+                  selCount={resizeSel.length} accepted={resizeAccepted}
+                  onAccept={()=>setResizeAccepted(true)}
+                  scaleInput={resizeScaleInput}
+                  onChangeScale={setResizeScaleInput}
+                />
+              )}
+              {t==='mirror'&&tool==='mirror'&&(
+                <MirrorPanel
+                  toolColor={activeColor}
+                  selCount={mirrorSel.length} accepted={mirrorAccepted}
+                  onAccept={()=>setMirrorAccepted(true)}
+                  hasAxisStart={!!mirrorP1}
                 />
               )}
             </div>

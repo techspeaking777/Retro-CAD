@@ -1,6 +1,10 @@
 // CopyModePanel.jsx — kid-friendly popover shown under Move/Rotate toolbar buttons.
 // Lets a child see and click the Move/Rotate <-> Copy toggle and the copy count,
 // while staying in sync with the same keyboard shortcuts (M/R, C, digits).
+// A "Done Selecting" button replaces the hidden Tab/right-click gesture needed
+// to move from "still picking entities" into the placement phase — selection
+// count is open-ended here (unlike Fillet's fixed 2), so some explicit
+// confirm step is unavoidable; this just makes it visible and clickable.
 import React from 'react'
 
 const stepBtnStyle={
@@ -9,7 +13,7 @@ const stepBtnStyle={
   display:'flex',alignItems:'center',justifyContent:'center',
 }
 
-export default function CopyModePanel({toolColor, primaryKey, primaryLabel, primaryMode, mode, count, onSetMode, onSetCount, locked}){
+export default function CopyModePanel({toolColor, primaryKey, primaryLabel, primaryMode, mode, count, onSetMode, onSetCount, locked, selCount, accepted, onAccept}){
   const isCopy=mode==='copy'
   const n=Math.max(1,parseInt(count)||1)
 
@@ -41,6 +45,24 @@ export default function CopyModePanel({toolColor, primaryKey, primaryLabel, prim
       <div style={{position:'absolute',top:-9,left:24,width:0,height:0,
         borderLeft:'8px solid transparent',borderRight:'8px solid transparent',
         borderBottom:`9px solid ${toolColor}`}}/>
+
+      {!accepted && (
+        <>
+          <div style={{textAlign:'center',color:'#888',fontSize:9,textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:6}}>
+            {selCount>0 ? `${selCount} Selected` : 'Click or Drag to Select'}
+          </div>
+          <button
+            onClick={()=>{ if(selCount>0) onAccept() }}
+            style={{
+              width:'100%',padding:'6px 0',borderRadius:6,border:'none',marginBottom:10,
+              background:selCount>0?toolColor:'#2a2a4a',color:selCount>0?'#0d0d1a':'#666',
+              fontFamily:'monospace',fontWeight:'bold',fontSize:12,cursor:selCount>0?'pointer':'default',
+            }}>
+            ✓ Done Selecting
+          </button>
+          <div style={{height:1,background:'#2a2a4a',margin:'0 0 10px'}}/>
+        </>
+      )}
 
       <div style={{textAlign:'center',color:'#888',fontSize:9,textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:8}}>
         {isCopy?`Making ${n} ${n===1?'Copy':'Copies'}`:`${primaryLabel} Mode`}

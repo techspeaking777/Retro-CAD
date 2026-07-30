@@ -636,7 +636,7 @@ const GUIDES = {
       { label: 'Step 2 — Confirm', text: 'Click ✓ Done Selecting in the box next to the tool (or press Tab / right-click).' },
       { label: 'Step 3 — Copy mode (optional)', text: 'To make copies instead of rotating: click C in the box, then use +/− to set the number of copies (1–100). Each copy is placed at the rotation angle apart. Skip this to just rotate.' },
       { label: 'Step 4 — Centre point', text: 'Click the point to rotate around. All copies will be evenly distributed around this centre.' },
-      { label: 'Step 5 — Angle', text: 'Type the angle in degrees and press Enter. Or press Tab to lock the length, then click on screen to set the angle visually.' },
+      { label: 'Step 5 — Angle', text: 'Type the angle in degrees into the box next to the tool and click Lock It In. Or skip the box and just click the canvas to set the angle freehand.' },
     ],
     tips: [
       'Click C then use +/− to set copy count — e.g. 6 = 6 evenly spaced copies.',

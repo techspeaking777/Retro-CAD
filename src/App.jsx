@@ -2968,6 +2968,15 @@ export default function App() {
     else if (circleCenter) circleLiveRadiusMm=pxToMm(Math.hypot(mousePos.x-circleCenter.x,mousePos.y-circleCenter.y))
   }
 
+  // Live angle for the Rotate/Copy panel's placeholder text while picking the angle
+  let rotateCopyLiveAngleDeg=null
+  if (tool==='rotatecopy'&&rotateCopyAccepted&&startPoint&&mousePos){
+    const dx=mousePos.x-startPoint.x,dy=mousePos.y-startPoint.y
+    let d=Math.atan2(dy,dx)*180/Math.PI
+    if (d<0) d+=360
+    rotateCopyLiveAngleDeg=d
+  }
+
   // Select-tool: real input-box panel, positioned near the current selection
   let selectDimPanel=null
   if (tool==='select'&&selection.length>0&&canvasRef.current){
@@ -3165,6 +3174,10 @@ export default function App() {
                   locked={!!startPoint}
                   selCount={rotateCopySel.length} accepted={rotateCopyAccepted}
                   onAccept={()=>setRotateCopyAccepted(true)}
+                  angleInput={angleInput} angleLocked={angleLocked}
+                  onChangeAngle={val=>{setAngleLocked(false);setAngleInput(val)}}
+                  onApplyAngle={()=>{ if(angleInput) setAngleLocked(true) }}
+                  liveAngleDeg={rotateCopyLiveAngleDeg}
                 />
               )}
               {t==='resize'&&tool==='resize'&&(

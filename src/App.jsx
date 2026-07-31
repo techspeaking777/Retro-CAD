@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { pxToMm, mmToPx, ALIGN_SNAP_DIST, ACQUIRE_DIST, SELECT_DIST, norm2pi, zoomRef } from './constants.js'
+import { pxToMm, mmToPx, ALIGN_SNAP_DIST, ACQUIRE_DIST, SELECT_DIST, LINE_SNAP_DIST, norm2pi, zoomRef } from './constants.js'
 import { angleOnArc, computeAllIntersections, circleCircleIntersect } from './geometry/intersections.js'
-import { getGeoSnap, getAllSnapPoints, checkAngle, getAngleSnap, applyTracking, computeLiveAngle, getTanPtsOnCircle, getExternalTangentPairs, nearestPt } from './geometry/snap.js'
+import { getGeoSnap, getAllSnapPoints, checkAngle, getAngleSnap, applyTracking, computeLiveAngle, getTanPtsOnCircle, getExternalTangentPairs, nearestPt, nearestOnSegment } from './geometry/snap.js'
 import { computeTrimPreview, performTrim, computeDeletePreview, distToSeg } from './tools/trimDelete.js'
 import { nearestOffsetEntity, computeOffsetPreview, distToEntity } from './tools/offsetMath.js'
 import { nearestMirrorEntity, buildMirror } from './tools/mirrorMath.js'
@@ -512,10 +512,57 @@ export default function App() {
     }
   }
 
+  // When a VERT/HORIZ alignment guide is active near a line, find exactly
+  // where that guide crosses the line — otherwise the endpoint just floats
+  // along the raw cursor position past the edge once tracking engages,
+  // which reads as the line having "desnapped": you can drag straight
+  // through the target edge without the endpoint ever landing on it.
+  function intersectTrackWithLine(tp,isVertical,raw,candidateLines){
+    const ld=LINE_SNAP_DIST/zoomRef.scale
+    let best=null,bestDist=ld+1
+    for (const l of candidateLines){
+      const n=nearestOnSegment(raw.x,raw.y,l.x1,l.y1,l.x2,l.y2)
+      if (n.dist<bestDist){bestDist=n.dist;best=l}
+    }
+    if (!best) return null
+    const{x1,y1,x2,y2}=best
+    if (isVertical){
+      const dx=x2-x1
+      if (Math.abs(dx)<1e-9) return null
+      const t=(tp.x-x1)/dx
+      if (t<-0.02||t>1.02) return null
+      return{x:tp.x,y:y1+t*(y2-y1)}
+    } else {
+      const dy=y2-y1
+      if (Math.abs(dy)<1e-9) return null
+      const t=(tp.y-y1)/dy
+      if (t<-0.02||t>1.02) return null
+      return{x:x1+t*(x2-x1),y:tp.y}
+    }
+  }
+
   function computeEnd(start,raw,tracked){
     if (!dimLocked&&!angleLocked){
       const geo=getGeoSnap(raw,lines,circles,arcs,start,false,splines,intersectionPts)
-      if (geo&&geo.type!=='tan') return{x:geo.x,y:geo.y,snapType:geo.type,angleSnap:checkAngle(start,geo),tracks:[]}
+      // 'online' is the weakest geo-snap tier (any point along an edge, not a
+      // specific feature) — when an alignment track is actively engaged, let
+      // it win instead, otherwise it could never apply near an edge: the
+      // cursor is within LINE_SNAP_DIST of the edge (triggering online) well
+      // before it's off the tracked vertical/horizontal line, so online
+      // would always fire first and VERT/HORIZ would show but never snap.
+      const ad=ALIGN_SNAP_DIST/zoomRef.scale
+      const activeTp=tracked.find(tp=>Math.abs(raw.y-tp.y)<ad||Math.abs(raw.x-tp.x)<ad)
+      if (geo&&geo.type==='online'&&activeTp){
+        const isVertical=Math.abs(raw.x-activeTp.x)<ad
+        const hit=intersectTrackWithLine(activeTp,isVertical,raw,lines)
+        // Snap exactly onto where the guide crosses the edge. If there's no
+        // valid crossing (parallel, or the guide misses the segment), fall
+        // through to plain tracking below rather than reusing the raw
+        // online point — that's what caused the desnap symptom originally.
+        if (hit) return{x:hit.x,y:hit.y,snapType:'online',angleSnap:checkAngle(start,hit),tracks:[]}
+      } else if (geo&&geo.type!=='tan'){
+        return{x:geo.x,y:geo.y,snapType:geo.type,angleSnap:checkAngle(start,geo),tracks:[]}
+      }
     }
     const{snapped,tracks}=applyTracking(raw,tracked)
     let endX=snapped.x,endY=snapped.y,angleSnap=null
@@ -546,8 +593,17 @@ export default function App() {
         return
       }
     }
-    const onAnyTrack=current.some(tp=>Math.abs(pos.y-tp.y)<ALIGN_SNAP_DIST/sc||Math.abs(pos.x-tp.x)<ALIGN_SNAP_DIST/sc)
-    if (!onAnyTrack&&current.length>0){trackedPtsRef.current=[];setTrackedPts([])}
+    // Sticky points (the current entity's own start/reference point, seeded
+    // where the tool sets startPoint) never decay — they're the reason
+    // VERT/HORIZ tracking exists at all near an edge, and ordinary diagonal
+    // mouse movement drifts off one axis well before it lines up on the
+    // other, so decaying them on every unaligned mousemove made tracking
+    // off your own start point effectively unusable (it only "came back"
+    // once the mouse happened to re-acquire a real snap point, e.g. an
+    // edge's endpoint/midpoint). Only opportunistically-acquired points
+    // (added by the loop above) still decay when you move away.
+    const next=current.filter(tp=>tp.sticky||Math.abs(pos.y-tp.y)<ALIGN_SNAP_DIST/sc||Math.abs(pos.x-tp.x)<ALIGN_SNAP_DIST/sc)
+    if (next.length!==current.length){trackedPtsRef.current=next;setTrackedPts(next)}
   },[])
 
   useEffect(()=>{
@@ -2281,16 +2337,23 @@ export default function App() {
           setPerpSourceLineIdx(hit?hit.idx:null)
           setStartPoint({x:pt.x,y:pt.y})
           setDimInput('');setDimLocked(false);setAngleInput('');setAngleLocked(false);setFocusField('dim')
-          setTrackedPts([]);trackedPtsRef.current=[]
+          // Seed tracking with the point we just started from, marked sticky
+          // so it survives updateTracking's decay (see the comment there) —
+          // without this, alignment off the line's own start only "works"
+          // once the mouse happens to wander back near some other snap
+          // point, which then re-acquires it.
+          setTrackedPts([{x:pt.x,y:pt.y,sticky:true}]);trackedPtsRef.current=[{x:pt.x,y:pt.y,sticky:true}]
           return
         }
         const geo=getGeoSnap(raw,lines,circles,arcs,null,tKeyDown,splines,intersectionPts)
+        let startPt
         if (geo?.type==='tan'){
           const circData=geo.circleIdx!==undefined?{...circles[geo.circleIdx],circleIdx:geo.circleIdx}:{cx:geo.cx,cy:geo.cy,r:geo.r,arcIdx:geo.arcIdx}
-          setDeferredTangent(circData);setStartPoint({x:geo.x,y:geo.y})
-        } else setStartPoint(geo?{x:geo.x,y:geo.y}:raw)
+          startPt={x:geo.x,y:geo.y}
+          setDeferredTangent(circData);setStartPoint(startPt)
+        } else { startPt=geo?{x:geo.x,y:geo.y}:raw; setStartPoint(startPt) }
         setDimInput('');setDimLocked(false);setAngleInput('');setAngleLocked(false);setFocusField('dim')
-        setTrackedPts([]);trackedPtsRef.current=[]
+        setTrackedPts([{...startPt,sticky:true}]);trackedPtsRef.current=[{...startPt,sticky:true}]
       } else if (deferredTangent){
         const dc=deferredTangent,geo=getGeoSnap(raw,lines,circles,arcs,null,tKeyDown,splines,intersectionPts)
         if (geo?.type==='tan'&&geo.circleIdx!==undefined&&dc.circleIdx!==undefined&&geo.circleIdx!==dc.circleIdx){

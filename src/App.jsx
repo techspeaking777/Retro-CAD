@@ -253,9 +253,13 @@ export default function App() {
     setDimInput('');setDimLocked(false);setAngleInput('');setAngleLocked(false);setFocusField('dim')
     setTrackedPts([]);trackedPtsRef.current=[];setDeferredTangent(null);setTKeyDown(false);setPKeyDown(false);setPerpSourceLineIdx(null)
   }
-  // Line tool: typing a length and/or angle only locks that value in — placing
-  // the actual line still requires a canvas click (see LineSnapPanel.jsx).
-  function applyLineDims(){
+  // Typing a length/distance and/or angle only locks that value in — placing
+  // the actual line or move/copy still requires a canvas click (see
+  // LineSnapPanel.jsx and CopyModePanel.jsx's Move distance+direction box,
+  // which share this same dimInput/angleInput state). The existing Tab-key
+  // single-field lock (below, in handleKeyDown) keeps working as a fallback;
+  // this is the visible Lock-It-In button's handler.
+  function applyDimAngleLock(){
     if (dimInput&&parseFloat(dimInput)>0) setDimLocked(true)
     if (angleInput&&parseFloat(angleInput)>=0) setAngleLocked(true)
   }
@@ -3040,6 +3044,17 @@ export default function App() {
     rotateCopyLiveAngleDeg=d
   }
 
+  // Live distance/direction for the Move/Copy panel's placeholder text while
+  // dragging out the destination point.
+  let moveCopyLiveDistMm=null, moveCopyLiveAngleDeg=null
+  if (tool==='movecopy'&&moveCopyAccepted&&startPoint&&mousePos){
+    const dx=mousePos.x-startPoint.x,dy=mousePos.y-startPoint.y
+    moveCopyLiveDistMm=pxToMm(Math.hypot(dx,dy))
+    let d=Math.atan2(dy,dx)*180/Math.PI
+    if (d<0) d+=360
+    moveCopyLiveAngleDeg=d
+  }
+
   // Select-tool: real input-box panel, positioned near the current selection
   let selectDimPanel=null
   if (tool==='select'&&selection.length>0&&canvasRef.current){
@@ -3136,7 +3151,7 @@ export default function App() {
                 dimLocked={dimLocked} angleLocked={angleLocked}
                 onChangeDim={v=>{setDimLocked(false);setDimInput(v)}}
                 onChangeAngle={v=>{setAngleLocked(false);setAngleInput(v)}}
-                onApply={applyLineDims}
+                onApply={applyDimAngleLock}
                 liveLenMm={lineLiveLenMm}
                 liveAngleDeg={lineLiveAngleDeg}
               />
@@ -3225,6 +3240,13 @@ export default function App() {
                   locked={!!startPoint}
                   selCount={moveCopySel.length} accepted={moveCopyAccepted}
                   onAccept={()=>setMoveCopyAccepted(true)}
+                  dimInput={dimInput} dimLocked={dimLocked}
+                  onChangeDim={val=>{setDimLocked(false);setDimInput(val)}}
+                  angleInput={angleInput} angleLocked={angleLocked}
+                  onChangeAngle={val=>{setAngleLocked(false);setAngleInput(val)}}
+                  onApplyLock={applyDimAngleLock}
+                  liveDistMm={moveCopyLiveDistMm}
+                  liveAngleDeg={moveCopyLiveAngleDeg}
                 />
               )}
               {t==='rotatecopy'&&tool==='rotatecopy'&&(
@@ -3239,7 +3261,7 @@ export default function App() {
                   onAccept={()=>setRotateCopyAccepted(true)}
                   angleInput={angleInput} angleLocked={angleLocked}
                   onChangeAngle={val=>{setAngleLocked(false);setAngleInput(val)}}
-                  onApplyAngle={()=>{ if(angleInput) setAngleLocked(true) }}
+                  onApplyLock={()=>{ if(angleInput) setAngleLocked(true) }}
                   liveAngleDeg={rotateCopyLiveAngleDeg}
                 />
               )}

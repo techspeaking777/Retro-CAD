@@ -31,7 +31,7 @@ export default function FilletRadiusPanel({ toolColor, value, onChange, onApply,
           value={value}
           onChange={e=>{ if(/^[0-9.]*$/.test(e.target.value)) onChange(e.target.value) }}
           onKeyDown={e=>{
-            e.stopPropagation()
+            if (e.key!=='Escape') e.stopPropagation()
             if (e.key==='Enter' && canApply) onApply()
           }}
           placeholder="0"

@@ -2748,13 +2748,6 @@ export default function App() {
       return
     }
 
-    if (tool==='line'&&startPoint&&!deferredTangent){
-      // Real Length/Angle boxes in LineSnapPanel own typing now — this just
-      // keeps Esc working. Placing the line still only happens via canvas click.
-      if (e.key==='Escape'){resetDrawState();return}
-      return
-    }
-
     if (!startPoint&&!circleCenter&&!deferredTangent&&!circleTanA) return
     if (e.key==='Escape'){resetDrawState();return}
     if (e.key==='Tab'){

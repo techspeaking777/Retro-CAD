@@ -187,6 +187,54 @@ export default function App() {
     return ()=>canvas.removeEventListener('wheel',onWheel)
   },[])
 
+  // Two-finger touch = pan + pinch-zoom, combined in one gesture (same anchor
+  // math as the wheel handler above, just re-derived every touchmove from the
+  // previous frame's midpoint/distance instead of a single wheel tick). One
+  // finger is deliberately left alone here — it already reaches the existing
+  // mouse handlers via the browser's native touch-to-mouse-event simulation,
+  // which is what drives drawing/selecting on a touchscreen today.
+  useEffect(()=>{
+    const canvas=canvasRef.current;if(!canvas)return
+    const pinch={active:false,midX:0,midY:0,dist:0}
+    const touchInfo=touches=>{
+      const rect=canvas.getBoundingClientRect()
+      const pts=Array.from(touches).map(t=>({x:t.clientX-rect.left,y:t.clientY-rect.top}))
+      return {
+        midX:(pts[0].x+pts[1].x)/2, midY:(pts[0].y+pts[1].y)/2,
+        dist:Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y),
+      }
+    }
+    const onTouchStart=e=>{
+      if (e.touches.length!==2) return
+      e.preventDefault()
+      const info=touchInfo(e.touches)
+      pinch.active=true;pinch.midX=info.midX;pinch.midY=info.midY;pinch.dist=info.dist
+    }
+    const onTouchMove=e=>{
+      if (!pinch.active||e.touches.length!==2) return
+      e.preventDefault()
+      const info=touchInfo(e.touches)
+      const {x:tx,y:ty,scale}=viewTransformRef.current
+      const factor=pinch.dist>0?info.dist/pinch.dist:1
+      const newScale=Math.max(0.05,Math.min(200,scale*factor))
+      const wx=(pinch.midX-tx)/scale,wy=(pinch.midY-ty)/scale
+      const vt={x:info.midX-wx*newScale,y:info.midY-wy*newScale,scale:newScale}
+      viewTransformRef.current=vt;zoomRef.scale=newScale;setViewTransform(vt)
+      pinch.midX=info.midX;pinch.midY=info.midY;pinch.dist=info.dist
+    }
+    const onTouchEnd=e=>{ if (e.touches.length<2) pinch.active=false }
+    canvas.addEventListener('touchstart',onTouchStart,{passive:false})
+    canvas.addEventListener('touchmove',onTouchMove,{passive:false})
+    canvas.addEventListener('touchend',onTouchEnd,{passive:false})
+    canvas.addEventListener('touchcancel',onTouchEnd,{passive:false})
+    return ()=>{
+      canvas.removeEventListener('touchstart',onTouchStart)
+      canvas.removeEventListener('touchmove',onTouchMove)
+      canvas.removeEventListener('touchend',onTouchEnd)
+      canvas.removeEventListener('touchcancel',onTouchEnd)
+    }
+  },[])
+
   useEffect(()=>{
     const onResize=()=>setCanvasSize({w:window.innerWidth-56,h:window.innerHeight-52})
     window.addEventListener('resize',onResize)
@@ -3295,7 +3343,7 @@ export default function App() {
           <div style={{flex:1,overflow:'hidden',minWidth:0}}>
           <canvas ref={canvasRef}
           width={canvasSize.w} height={canvasSize.h}
-          style={{background:'white',cursor:isPanningRef.current?'grabbing':tool==='select'?(selectDragHandleRef.current?'grabbing':selectHover?'pointer':'default'):'crosshair',display:'block'}}
+          style={{background:'white',cursor:isPanningRef.current?'grabbing':tool==='select'?(selectDragHandleRef.current?'grabbing':selectHover?'pointer':'default'):'crosshair',display:'block',touchAction:'none'}}
           onClick={handleClick} onDoubleClick={handleDoubleClick} onContextMenu={handleContextMenu}
           onMouseMove={handleMouseMove} onMouseDown={handleMouseDown} onMouseUp={handleMouseUp}
         />

@@ -2534,7 +2534,25 @@ export default function App() {
     if (tool==='resize'&&!resizeAccepted&&resizeSel.length>0) setResizeAccepted(true)
   }
 
+  // Raw mousemove fires far faster than the screen can repaint (120Hz+ on a
+  // lot of mice/trackpads) — processMouseMove recomputes snap points from
+  // scratch every call, so running it unthrottled means most of that work
+  // is thrown away before the next repaint ever happens, just competing with
+  // actual rendering for the same thread. Coalescing to one call per
+  // animation frame (using only the latest position) keeps every tool's
+  // behavior identical while cutting that wasted work out.
+  const pendingMoveRef=useRef(null)
+  const moveRafRef=useRef(0)
   function handleMouseMove(e){
+    pendingMoveRef.current={clientX:e.clientX,clientY:e.clientY,buttons:e.buttons}
+    if (moveRafRef.current) return
+    moveRafRef.current=requestAnimationFrame(()=>{
+      moveRafRef.current=0
+      const p=pendingMoveRef.current
+      if (p) processMouseMove(p)
+    })
+  }
+  function processMouseMove(e){
     const rect=canvasRef.current.getBoundingClientRect()
     const sx=e.clientX-rect.left,sy=e.clientY-rect.top
 

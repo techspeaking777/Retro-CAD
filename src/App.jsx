@@ -277,8 +277,8 @@ export default function App() {
   }
 
   const { commit, undo, redo, canUndo, canRedo } = useHistory()
-  const snapshot = () => ({ lines, circles, arcs, splines })
-  const restore = (snap) => { setLines(snap.lines); setCircles(snap.circles); setArcs(snap.arcs); setSplines(snap.splines||[]) }
+  const snapshot = () => ({ lines, circles, arcs, splines, dims })
+  const restore = (snap) => { setLines(snap.lines); setCircles(snap.circles); setArcs(snap.arcs); setSplines(snap.splines||[]); setDims(snap.dims||[]) }
 
   const trackedPtsRef=useRef([])
   const splinePointsRef=useRef([])
@@ -1425,8 +1425,10 @@ export default function App() {
 
     // Draw committed dimensions
     dims.forEach((dim,di)=>{
+      const isDelTarget=deletePreview?.kind==='dim'&&deletePreview.idx===di
+      const dimColor=isDelTarget?'#F44336':'#222'
       ctx.save()
-      ctx.strokeStyle='#222';ctx.fillStyle='#222'
+      ctx.strokeStyle=dimColor;ctx.fillStyle=dimColor
       const LW=0.8/sc, ARR=6/sc, FS=11/sc
       ctx.lineWidth=LW
       if (dim.kind==='linear'){
@@ -1462,7 +1464,7 @@ export default function App() {
         if(ang>Math.PI/2||ang<-Math.PI/2) ang+=Math.PI
         ctx.rotate(ang)
         ctx.font=`${FS*sc}px sans-serif`;ctx.textAlign='center';ctx.textBaseline='bottom'
-        ctx.fillStyle='#222';ctx.fillText(txt,0,-3)
+        ctx.fillStyle=dimColor;ctx.fillText(txt,0,-3)
         ctx.restore()
       } else if (dim.kind==='diameter'){
         const {cx,cy,r,angle}=dim
@@ -2700,6 +2702,15 @@ export default function App() {
       if ((e.key==='Enter'||e.key==='Return')&&splinePoints.length>=2){
         e.preventDefault();finishSpline(splinePoints);return
       }
+      return
+    }
+
+    if (tool==='dim'){
+      // Cancel the in-progress dimension and stay in the tool, same
+      // single-stage cancel-and-stay pattern as Offset/Mirror below — the
+      // status bar already promised "Esc" at every step but nothing here
+      // ever actually handled the key.
+      if (e.key==='Escape'){resetDim();return}
       return
     }
 
